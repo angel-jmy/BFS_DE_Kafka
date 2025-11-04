@@ -33,10 +33,12 @@ from employee import Employee
 import confluent_kafka
 import pandas as pd
 from confluent_kafka.serialization import StringSerializer
+from datetime import datetime
 
 
 employee_topic_name = "bf_employee_salary"
 csv_file = 'Employee_Salaries.csv'
+dept_name = {"ECC", "CIT", "EMS"} # Allowed department names
 
 #Can use the confluent_kafka.Producer class directly
 class salaryProducer(Producer):
@@ -55,7 +57,42 @@ class DataHandler:
     Your data handling logic goes here. 
     You can also implement the same logic elsewhere. Your call
     '''
-    pass
+    DEPT_COL = "Department"
+    SALARY_COL = "Salary"
+    HIRED_DATE_COL = "Initial Hire Date"
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def rows(self):
+        with open(self.path, newline="", encoding="utf-8") as f:
+            rdr = csv.DictReader(f)
+            for row in rdr:
+                dept = (row[self.DEPT_COL] or "").strip().upper()
+                if dept not in ALLOWED_DEPTS:
+                    continue
+
+                # Round salary down to integer dollars
+                salary = int(math.floor(float(row[self.SALARY_COL])))
+
+                # Keep only employees hired after 2010
+                date_str = row[self.HIRED_YEAR_COL].strip()
+                try:
+                    hired_year = datetime.strptime(date_str, "%d-%b-%y").year
+                except ValueError:
+                    continue
+
+                if hired_year <= 2010:
+                    continue
+
+                # emp_dept + emp_salary + to_json()
+                yield Employee(emp_dept=dept, emp_salary=salary)
+
+
+def _delivery(err, msg):
+    if err:
+        print(f"Delivery failed: {err}")
+
 
 if __name__ == '__main__':
     encoder = StringSerializer('utf-8')
@@ -71,4 +108,14 @@ if __name__ == '__main__':
         producer.produce(employee_topic_name, key=encoder(emp.emp_dept), value=encoder(emp.to_json()))
         producer.poll(1)
     '''
-    
+    for emp in reader.rows():
+        producer.produce(
+            employee_topic_name,
+            key=encoder(emp.emp_dept),     # partition by department
+            value=encoder(emp.to_json()),
+            on_delivery=_delivery,
+        )
+        producer.poll(0)
+
+    producer.flush(10)
+    print("Producer finished sending filtered employee records.")
