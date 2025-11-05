@@ -52,7 +52,10 @@ if __name__ == '__main__':
     employee_topic_name = "bf_employee_cdc"
     num_parition = 3
     if client.topic_exists(employee_topic_name):
-        client.delete_topic([employee_topic_name])
+        print(f"Topic '{employee_topic_name}' already exists.")
+        client.delete_topic([employee_topic_name]) # Need to rerun to recreate topic
     else:
         client.create_topic(employee_topic_name, num_parition)
+        print(f"Topic '{employee_topic_name}' created successfully.")
+    
     
