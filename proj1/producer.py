@@ -59,6 +59,7 @@ class DataHandler:
     '''
     DEPT_COL = 'Department'
     DEPT_DIV_COL = 'Department-Division'
+    POS_TITLE_COL = 'Position Title'
     HIRED_YEAR_COL = 'Initial Hire Date'
     SALARY_COL = 'Salary'
 
@@ -71,6 +72,7 @@ class DataHandler:
             for row in rdr:
                 dept = (row[self.DEPT_COL] or "").strip().upper()
                 dept_div = row[self.DEPT_DIV_COL] or ""
+                pos_title = row[self.POS_TITLE_COL] or ""
 
                 if dept not in ALLOWED_DEPTS:
                     continue
@@ -90,7 +92,7 @@ class DataHandler:
 
 
                 # emp_dept + emp_salary + to_json()
-                yield Employee(emp_dept=dept, emp_dept_div = dept_div, emp_hire_date = hire_date, emp_salary=salary)
+                yield Employee(emp_dept=dept, emp_dept_div = dept_div, emp_pos_title = pos_title, emp_hire_date = hire_date, emp_salary=salary)
 
 
 def _delivery(err, msg):

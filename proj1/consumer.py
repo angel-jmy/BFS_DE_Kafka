@@ -31,7 +31,7 @@ import psycopg2
 from confluent_kafka import Consumer, KafkaError, KafkaException
 from confluent_kafka.serialization import StringDeserializer
 from employee import Employee
-from producer import employee_topic_name #you do not want to hard copy it
+from producer import employee_topic_name # you do not want to hard copy it
 
 class SalaryConsumer(Consumer):
     #if running outside Docker (i.e. producer is NOT in the docer-compose file): host = localhost and port = 29092
@@ -109,19 +109,19 @@ class ConsumingMethods:
             # Insert the detail row
             cur.execute(
                 "insert into department_employee (department, department_division, position_title, hire_date, salary) "
-                "VALUES (%s, %s, %s, %s, %s)",
-                (e.emp_dept, None, None, int(e.emp_salary)),
+                "values (%s, %s, %s, %s, %s)",
+                (e.emp_dept, e.emp_dept_div, e.emp_pos_title, e.emp_hire_date, e.emp_salary),
             )
 
             # 3) upsert running total for the department
             cur.execute(
                 """
-                INSERT INTO department_totals (department, total_salary)
-                VALUES (%s, %s)
-                ON CONFLICT (department)
-                DO UPDATE SET total_salary = department_totals.total_salary + EXCLUDED.total_salary;
+                insert into public.department_employee_salary (department, total_salary)
+                values (%s, %s)
+                on conflict (department)
+                do update set total_salary = department_totals.total_salary + excluded.total_salary;
                 """,
-                (e.emp_dept, int(e.emp_salary)),
+                (e.emp_dept, e.emp_salary),
             )
 
             cur.close()
@@ -130,5 +130,5 @@ class ConsumingMethods:
             print(err)
 
 if __name__ == '__main__':
-    consumer = SalaryConsumer(group_id=?) #what is the group id here?
-    consumer.consume([?],ConsumingMethods.add_salary) #what is the topic here?
+    consumer = SalaryConsumer(group_id= 'salary-consumers-grp1') #what is the group id here?
+    consumer.consume([employee_topic_name],ConsumingMethods.add_salary) #what is the topic here?
