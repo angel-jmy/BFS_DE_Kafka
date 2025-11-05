@@ -12,11 +12,11 @@ class Employee:
         
     @staticmethod
     def from_csv_line(line):
-        return Employee(line[0], line[1], line[3], line[5], line[7])
+        return Employee(*line)
 
     def to_json(self):
-        return json.dumps(self.__dict__)
-        # d = self.__dict__.copy()
-        # if isinstance(d["emp_hire_date"], datetime):
-        #     d["emp_hire_date"] = d["emp_hire_date"].date().isoformat()
-        # return json.dumps(d)
+        # return json.dumps(self.__dict__)
+        d = self.__dict__.copy()
+        if isinstance(d["emp_hire_date"], datetime):
+            d["emp_hire_date"] = d["emp_hire_date"].date().isoformat()
+        return json.dumps(d)

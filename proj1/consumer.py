@@ -75,7 +75,10 @@ class SalaryConsumer(Consumer):
                     continue
 
                 print(f"got message: key={msg.key()} bytes={len(msg.value())}", flush=True)
-                print(f'processing {msg.value()}', flush = True)
+                if not msg.key():
+                    continue
+                    
+                # print(f'processing {msg.value()}', flush = True)
                 processing_func(msg)
 
         finally:

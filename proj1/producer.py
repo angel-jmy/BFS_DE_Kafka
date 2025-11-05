@@ -67,9 +67,11 @@ class DataHandler:
     def __init__(self, path: str):
         self.path = path
 
-    def load_csv(self, csv_file):
-        df = pd.read_csv(csv_file)
+    def load_csv(self):
+        df = pd.read_csv(self.path)
+        lines = []
         for idx, row in df.iterrows():
+            # print(row)
             dept = (row[self.DEPT_COL] or "").strip().upper()
             dept_div = row[self.DEPT_DIV_COL] or ""
             pos_title = row[self.POS_TITLE_COL] or ""
@@ -81,16 +83,16 @@ class DataHandler:
             date_str = row[self.HIRED_YEAR_COL].strip()
 
             try:
-                hire_date = datetime.strptime(date_str, "%d-%b-%y")
+                hire_date = datetime.strptime(date_str, "%d-%b-%Y")
                 hired_year = hire_date.year
-                if hired_year <= 2010:
+                if hired_year < 2010:
                     continue
             except ValueError:
                 continue
 
             lines.append([dept, dept_div, pos_title, hire_date, salary])
 
-            return lines
+        return lines
 
 
 
@@ -101,9 +103,9 @@ def _delivery(err, msg):
 
 if __name__ == '__main__':
     encoder = StringSerializer('utf-8')
-    reader = DataHandler()
+    reader = DataHandler(csv_file)
     producer = salaryProducer()
-    lines = reader.load_csv(csv_file)
+    lines = reader.load_csv()
     '''
     # implement other instances as needed
     # you can let producer process line by line, and stop after all lines are processed, or you can keep the producer running.
