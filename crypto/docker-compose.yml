@@ -1,0 +1,65 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    ports:
+      - '2181:2181'
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - 29092:29092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  db:
+    image: postgres:14.1-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - db:/var/lib/postgresql/data     
+  producer:
+    build: 
+      context: .
+      dockerfile: Dockerfile.producer
+    depends_on:
+      - kafka        
+    command: python3 api.py
+    ports:
+     - '5000:5000'
+  trade_consumer:
+    build: 
+      context: .
+      dockerfile: Dockerfile.tradeconsumer
+    depends_on:
+      - kafka
+      - db        
+    command: python3 TradeConsumer.py
+    ports:
+     - '6000:6000' 
+  # da_consumer:
+  #   build: 
+  #     context: .
+  #     dockerfile: Dockerfile.DAconsumer
+  #   depends_on:
+  #     - kafka
+  #     - db        
+  #   command: python3 DAConsumer.py
+  #   ports:
+  #    - '6500:6500' 
+volumes:
+  db:
+    driver: local
