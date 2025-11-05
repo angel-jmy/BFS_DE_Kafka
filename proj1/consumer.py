@@ -74,7 +74,8 @@ class ConsumingMethods:
         try:
             conn = psycopg2.connect(
                 #use localhost if not run in Docker
-                host="0.0.0.0",
+                # host="0.0.0.0",
+                host="locaohost",
                 database="postgres",
                 user="postgres",
                 port = '5432',
@@ -82,7 +83,49 @@ class ConsumingMethods:
             conn.autocommit = True
             cur = conn.cursor()
             #your logic goes here
+
+            # 1) Create tables
+            cur.execute(
+                """
+                create table if not exists department_employee (
+                  department varchar(200),
+                  department_division varchar(200),
+                  position_title     varchar(200),
+                  hire_date          date,
+                  salary             decimal
+                );
+                """
+            )
+            cur.execute(
+                """
+                create table if not exists public.department_employee_salary (
+                  department   varchar(200) not null,
+                  total_salary int4 NULL,
+                  constraint department_employee_salary_pk primary key (department)
+                );
+                """
+            )
+
+            # Insert the detail row
+            cur.execute(
+                "insert into department_employee (department, department_division, position_title, hire_date, salary) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (e.emp_dept, None, None, int(e.emp_salary)),
+            )
+
+            # 3) upsert running total for the department
+            cur.execute(
+                """
+                INSERT INTO department_totals (department, total_salary)
+                VALUES (%s, %s)
+                ON CONFLICT (department)
+                DO UPDATE SET total_salary = department_totals.total_salary + EXCLUDED.total_salary;
+                """,
+                (e.emp_dept, int(e.emp_salary)),
+            )
+
             cur.close()
+            conn.close()
         except Exception as err:
             print(err)
 

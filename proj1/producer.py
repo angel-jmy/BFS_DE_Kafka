@@ -57,9 +57,10 @@ class DataHandler:
     Your data handling logic goes here. 
     You can also implement the same logic elsewhere. Your call
     '''
-    DEPT_COL = "Department"
-    SALARY_COL = "Salary"
-    HIRED_DATE_COL = "Initial Hire Date"
+    DEPT_COL = 'Department'
+    DEPT_DIV_COL = 'Department-Division'
+    HIRED_YEAR_COL = 'Initial Hire Date'
+    SALARY_COL = 'Salary'
 
     def __init__(self, path: str):
         self.path = path
@@ -69,6 +70,8 @@ class DataHandler:
             rdr = csv.DictReader(f)
             for row in rdr:
                 dept = (row[self.DEPT_COL] or "").strip().upper()
+                dept_div = row[self.DEPT_DIV_COL] or ""
+
                 if dept not in ALLOWED_DEPTS:
                     continue
 
@@ -78,15 +81,16 @@ class DataHandler:
                 # Keep only employees hired after 2010
                 date_str = row[self.HIRED_YEAR_COL].strip()
                 try:
-                    hired_year = datetime.strptime(date_str, "%d-%b-%y").year
+                    hire_date = datetime.strptime(date_str, "%d-%b-%y")
+                    hired_year = hire_date.year
+                    if hired_year <= 2010:
+                        continue
                 except ValueError:
                     continue
 
-                if hired_year <= 2010:
-                    continue
 
                 # emp_dept + emp_salary + to_json()
-                yield Employee(emp_dept=dept, emp_salary=salary)
+                yield Employee(emp_dept=dept, emp_dept_div = dept_div, emp_hire_date = hire_date, emp_salary=salary)
 
 
 def _delivery(err, msg):
@@ -96,7 +100,7 @@ def _delivery(err, msg):
 
 if __name__ == '__main__':
     encoder = StringSerializer('utf-8')
-    reader = DataHandler()
+    reader = DataHandler(csv_file)
     producer = salaryProducer()
     '''
     # implement other instances as needed
@@ -115,7 +119,7 @@ if __name__ == '__main__':
             value=encoder(emp.to_json()),
             on_delivery=_delivery,
         )
-        producer.poll(0)
+        producer.poll(1)
 
     producer.flush(10)
     print("Producer finished sending filtered employee records.")
