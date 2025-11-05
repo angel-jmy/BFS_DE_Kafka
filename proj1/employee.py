@@ -16,3 +16,7 @@ class Employee:
 
     def to_json(self):
         return json.dumps(self.__dict__)
+        # d = self.__dict__.copy()
+        # if isinstance(d["emp_hire_date"], datetime):
+        #     d["emp_hire_date"] = d["emp_hire_date"].date().isoformat()
+        # return json.dumps(d)

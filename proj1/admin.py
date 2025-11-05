@@ -52,9 +52,11 @@ class salaryClient(AdminClient):
 if __name__ == '__main__':
     client = salaryClient()
     employee_topic_name = "bf_employee_salary"
-    num_parition = 3
+    num_partitions = 3
+
     if client.topic_exists(employee_topic_name):
-        client.delete_topic([employee_topic_name])
+        print(f"Topic '{employee_topic_name}' already exists.")
     else:
-        client.create_topic(employee_topic_name, num_parition)
+        client.create_topic(employee_topic_name, num_partitions)
+        print(f"Topic '{employee_topic_name}' created successfully.")
     

@@ -32,6 +32,7 @@ from confluent_kafka import Producer
 from employee import Employee
 import confluent_kafka
 import pandas as pd
+import math
 from confluent_kafka.serialization import StringSerializer
 from datetime import datetime
 
@@ -66,33 +67,31 @@ class DataHandler:
     def __init__(self, path: str):
         self.path = path
 
-    def rows(self):
-        with open(self.path, newline="", encoding="utf-8") as f:
-            rdr = csv.DictReader(f)
-            for row in rdr:
-                dept = (row[self.DEPT_COL] or "").strip().upper()
-                dept_div = row[self.DEPT_DIV_COL] or ""
-                pos_title = row[self.POS_TITLE_COL] or ""
+    def load_csv(self, csv_file):
+        df = pd.read_csv(csv_file)
+        for idx, row in df.iterrows():
+            dept = (row[self.DEPT_COL] or "").strip().upper()
+            dept_div = row[self.DEPT_DIV_COL] or ""
+            pos_title = row[self.POS_TITLE_COL] or ""
 
-                if dept not in ALLOWED_DEPTS:
+            if dept not in dept_name:
+                continue
+
+            salary = int(math.floor(float(row[self.SALARY_COL])))
+            date_str = row[self.HIRED_YEAR_COL].strip()
+
+            try:
+                hire_date = datetime.strptime(date_str, "%d-%b-%y")
+                hired_year = hire_date.year
+                if hired_year <= 2010:
                     continue
+            except ValueError:
+                continue
 
-                # Round salary down to integer dollars
-                salary = int(math.floor(float(row[self.SALARY_COL])))
+            lines.append([dept, dept_div, pos_title, hire_date, salary])
 
-                # Keep only employees hired after 2010
-                date_str = row[self.HIRED_YEAR_COL].strip()
-                try:
-                    hire_date = datetime.strptime(date_str, "%d-%b-%y")
-                    hired_year = hire_date.year
-                    if hired_year <= 2010:
-                        continue
-                except ValueError:
-                    continue
+            return lines
 
-
-                # emp_dept + emp_salary + to_json()
-                yield Employee(emp_dept=dept, emp_dept_div = dept_div, emp_pos_title = pos_title, emp_hire_date = hire_date, emp_salary=salary)
 
 
 def _delivery(err, msg):
@@ -102,8 +101,9 @@ def _delivery(err, msg):
 
 if __name__ == '__main__':
     encoder = StringSerializer('utf-8')
-    reader = DataHandler(csv_file)
+    reader = DataHandler()
     producer = salaryProducer()
+    lines = reader.load_csv(csv_file)
     '''
     # implement other instances as needed
     # you can let producer process line by line, and stop after all lines are processed, or you can keep the producer running.
@@ -114,14 +114,16 @@ if __name__ == '__main__':
         producer.produce(employee_topic_name, key=encoder(emp.emp_dept), value=encoder(emp.to_json()))
         producer.poll(1)
     '''
-    for emp in reader.rows():
-        producer.produce(
-            employee_topic_name,
-            key=encoder(emp.emp_dept),     # partition by department
+    sent = 0
+    for line in lines:
+        emp = Employee.from_csv_line(line)
+        producer.produce(employee_topic_name, 
+            key=encoder(emp.emp_dept), 
             value=encoder(emp.to_json()),
-            on_delivery=_delivery,
+            on_delivery=_delivery
         )
         producer.poll(1)
+        sent += 1
 
     producer.flush(10)
-    print("Producer finished sending filtered employee records.")
+    print(f"Producer finished. Sent {sent} messages.")

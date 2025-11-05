@@ -28,7 +28,7 @@ import random
 import string
 import sys
 import psycopg2
-from confluent_kafka import Consumer, KafkaError, KafkaException
+from confluent_kafka import Consumer, KafkaError, KafkaException, OFFSET_BEGINNING
 from confluent_kafka.serialization import StringDeserializer
 from employee import Employee
 from producer import employee_topic_name # you do not want to hard copy it
@@ -50,44 +50,65 @@ class SalaryConsumer(Consumer):
     def consume(self, topics, processing_func):
         #implement your message processing logic here. Not necessary to follow the template. 
         try:
-            self.subscribe(topics)
+            # seek to beginning on assignment (belt-and-suspenders)
+            def on_assign(c, partitions):
+                
+                for p in partitions:
+                    print(f"Assigned: topic={p.topic}, partition={p.partition}, "
+                          f"offset={p.offset}, error={p.error}", flush=True)
+                    p.offset = OFFSET_BEGINNING
+                c.assign(partitions)
+
+            print("group.id =", self.group_id, flush=True)
+            print("Subscribing to:", topics, flush=True)
+            self.subscribe(topics, on_assign=on_assign)
+
             while self.keep_runnning:
                 msg = self.poll(timeout=1.0)
 
-                #can implement other logics for msg
+                if msg is None:
+                    print("poll: no message", flush=True)
+                    continue
 
-                if not msg:
-                    pass 
-                elif msg.error():
-                    pass
-                else:
-                    processing_func(msg)
+                if msg.error():
+                    print(f"poll error: {msg.error()}", flush=True)
+                    continue
+
+                print(f"got message: key={msg.key()} bytes={len(msg.value())}", flush=True)
+                print(f'processing {msg.value()}', flush = True)
+                processing_func(msg)
+
         finally:
-            # Close down consumer to commit final offsets.
             self.close()
 
 #or can put all functions in a separte file and import as a module
 class ConsumingMethods:
     @staticmethod
     def add_salary(msg):
+
+
         e = Employee(**(json.loads(msg.value())))
         try:
             conn = psycopg2.connect(
                 #use localhost if not run in Docker
                 # host="0.0.0.0",
-                host="locaohost",
+                host="localhost",
+                # host = "host.docker.internal",
                 database="postgres",
                 user="postgres",
                 port = '5432',
                 password="postgres")
             conn.autocommit = True
             cur = conn.cursor()
+            cur.execute("SELECT version();")
+            version = cur.fetchone()
+            print(f"Connected to Postgres. Server version: {version[0]}")
             #your logic goes here
 
             # 1) Create tables
             cur.execute(
                 """
-                create table if not exists department_employee (
+                create table if not exists public.department_employee (
                   department varchar(200),
                   department_division varchar(200),
                   position_title     varchar(200),
@@ -108,7 +129,7 @@ class ConsumingMethods:
 
             # Insert the detail row
             cur.execute(
-                "insert into department_employee (department, department_division, position_title, hire_date, salary) "
+                "insert into public.department_employee (department, department_division, position_title, hire_date, salary) "
                 "values (%s, %s, %s, %s, %s)",
                 (e.emp_dept, e.emp_dept_div, e.emp_pos_title, e.emp_hire_date, e.emp_salary),
             )
@@ -116,10 +137,10 @@ class ConsumingMethods:
             # 3) upsert running total for the department
             cur.execute(
                 """
-                insert into public.department_employee_salary (department, total_salary)
-                values (%s, %s)
-                on conflict (department)
-                do update set total_salary = department_totals.total_salary + excluded.total_salary;
+                INSERT INTO public.department_employee_salary (department, total_salary)
+                VALUES (%s, %s)
+                ON CONFLICT (department)
+                DO UPDATE SET total_salary = department_employee_salary.total_salary + EXCLUDED.total_salary;
                 """,
                 (e.emp_dept, e.emp_salary),
             )
@@ -130,5 +151,5 @@ class ConsumingMethods:
             print(err)
 
 if __name__ == '__main__':
-    consumer = SalaryConsumer(group_id= 'salary-consumers-grp1') #what is the group id here?
+    consumer = SalaryConsumer(group_id= 'salary-consumers-0') #what is the group id here?
     consumer.consume([employee_topic_name],ConsumingMethods.add_salary) #what is the topic here?
