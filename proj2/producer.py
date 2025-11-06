@@ -62,11 +62,11 @@ class cdcProducer(Producer):
             eln = row['Last Name']
             edob = row['Date of Birth']
             ecity = row['City']
-            lines.append([eid, efn, eln, edob, ecity, 'INSERT'])
+            lines.append(['insert', eid, efn, eln, edob, ecity])
 
         return lines
 
-    def load_csv_to_db(self, emps)
+    def load_csv_to_db(self, emps):
         try:
             conn = psycopg2.connect(
                 host="localhost",
@@ -84,19 +84,19 @@ class cdcProducer(Producer):
                     values (%s, %s, %s, %s, %s, %s)
                     on conflict (emp_id)
                     do update set
-                    first_name = excluded.first_name
-                    last_name = excluded.last_name
-                    dob = excluded.dob
-                    city = excluded.city
-                    salary = excluded.salary
-                    """
-                    (emp[0], emp[1], emp[2], emp[3], emp[4], random.randint(50000, 150000))
+                    first_name = excluded.first_name,
+                    last_name = excluded.last_name,
+                    dob = excluded.dob,
+                    city = excluded.city,
+                    salary = excluded.salary;
+                    """,
+                    (emp[1], emp[2], emp[3], emp[4], emp[5], random.randint(50000, 150000))
                     )
 
 
             cur.close()
         except Exception as err:
-            pass
+            print(f"Error occurred: {err}")
         
         return # if you need to return sth, modify here
 
@@ -139,11 +139,11 @@ class cdcProducer(Producer):
             
             cur.close()
         except Exception as err:
-            pass
+            print(f"Error occurred: {err}")
         
-        return        
-    
-    def fetch_cdc(self,):
+        return 
+
+    def setup_cdc(self):
         try:
             conn = psycopg2.connect(
                 host="localhost",
@@ -154,6 +154,8 @@ class cdcProducer(Producer):
             conn.autocommit = True
             cur = conn.cursor()
             #your logic should go here
+            cur.execute(f"DROP TRIGGER IF EXISTS {schema_name}.{trigger_name} ON {schema_name}.{table_employee};")
+            # cur.execute(f"DROP FUNCTION IF EXISTS {schema_name}.func_{trigger_name}();")
 
             # Create function
             cur.execute(
@@ -197,17 +199,53 @@ class cdcProducer(Producer):
         
         return # if you need to return sth, modify here
     
+    
+    def fetch_cdc(self, encoder):
+        try:
+            conn = psycopg2.connect(
+                host="localhost",
+                database="postgres",
+                user="postgres",
+                port = '5432',
+                password="postgres")
+            conn.autocommit = True
+            cur = conn.cursor()
+            #your logic should go here
+
+            # Call produce
+            cur.execute(f"""
+                select action, emp_id, first_name, last_name, dob, city, salary 
+                from {schema_name}.{table_emp_cdc};
+                """)
+            rows = cur.fetchall()
+            if not rows:
+                continue
+            
+
+            for row in rows:
+                record = Employee.from_line(row)
+                self.produce(employee_topic_name,
+                             key = encoder(row[1]),
+                             value = encoder(record.to_json())
+                      )
+
+            self.flush(10)
+
+            cur.close()
+        except Exception as err:
+            print(f"Error occurred: {err}")
+        
+        return # if you need to return sth, modify here
+    
 
 if __name__ == '__main__':
     encoder = StringSerializer('utf-8')
     producer = cdcProducer()
     emps = producer.load_csv(csv_file)
     self.create_tables()
+    self.setup_cdc()
     producer.load_csv_to_db(emps)
     
     while producer.running:
         # your implementation goes here
-        self.fetch_cdc()
-        
-
-    
+        self.fetch_cdc(encoder)
