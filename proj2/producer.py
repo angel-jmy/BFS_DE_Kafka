@@ -37,6 +37,10 @@ import random
 import time
 from datetime import datetime, timedelta
 
+# import sys
+# sys.stdout.reconfigure(encoding='utf-8')
+# sys.stderr.reconfigure(encoding='utf-8')
+
 
 employee_topic_name = "bf_employee_cdc"
 csv_file = "employees.csv"
@@ -86,30 +90,30 @@ class cdcProducer(Producer):
             for emp in emps:
                 print([emp[1], emp[2], emp[3], datetime.strptime(emp[4], "%Y-%m-%d").date(), emp[5]], flush = True)
                 # print(datetime.strptime(emp[4], "%Y-%m-%d").date(), flush = True)
-                # cur.execute(
-                #     f"insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)"
-                #     """
-                #     values (%s, %s, %s, %s, %s, %s)
-                #     on conflict (emp_id)
-                #     do update set
-                #         first_name = excluded.first_name,
-                #         last_name = excluded.last_name,
-                #         dob = excluded.dob,
-                #         city = excluded.city,
-                #         salary = excluded.salary
-                #     where (employees.first_name, employees.last_name, employees.dob, employees.city, employees.salary)
-                #      is distinct from
-                #        (excluded.first_name, excluded.last_name, excluded.dob, excluded.city, excluded.salary);""",
-                #     (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
-                #     )
                 cur.execute(
                     f"insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)"
                     """
                     values (%s, %s, %s, %s, %s, %s)
                     on conflict (emp_id)
-                    do nothing;""",
+                    do update set
+                        first_name = excluded.first_name,
+                        last_name = excluded.last_name,
+                        dob = excluded.dob,
+                        city = excluded.city,
+                        salary = excluded.salary
+                    where (employees.first_name, employees.last_name, employees.dob, employees.city, employees.salary)
+                     is distinct from
+                       (excluded.first_name, excluded.last_name, excluded.dob, excluded.city, excluded.salary);""",
                     (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
                     )
+                # cur.execute(
+                #     f"insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)"
+                #     """
+                #     values (%s, %s, %s, %s, %s, %s)
+                #     on conflict (emp_id)
+                #     do nothing;""",
+                #     (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
+                #     )
                 print("Inserted records to table!", flush = True)
 
 
@@ -250,11 +254,13 @@ class cdcProducer(Producer):
                     )
 
                 rows = cur.fetchall()
-                print(rows, flush = True)
 
                 if not rows:
+                    print("== Waiting for operations ==", flush = True)
                     time.sleep(1)
                     continue
+
+                print(rows, flush = True)
                 
                 sent = 0
                 for idx, row in enumerate(rows):

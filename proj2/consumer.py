@@ -36,6 +36,11 @@ from employee import Employee
 from producer import employee_topic_name
 from datetime import datetime
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+
+
 schema_name = "public"
 table_employee = "employees"
 
@@ -91,7 +96,7 @@ class cdcConsumer(Consumer):
                 msg = self.poll(timeout=1.0)
 
                 if msg is None:
-                    print("poll: no message", flush=True)
+                    print("== Waiting for messages ==", flush=True)
                     continue
 
                 if msg.error():
@@ -110,7 +115,7 @@ class cdcConsumer(Consumer):
 
 def update_dst(msg):
     e = Employee(**(json.loads(msg.value())))
-    print(e.action, flush = True)
+    # print(e.action, flush = True)
 
     try:
         conn = psycopg2.connect(
@@ -131,6 +136,8 @@ def update_dst(msg):
         emp_city = e.emp_city
         emp_salary = e.emp_salary
         action = e.action
+
+        print(e.action, e.emp_FN, e.emp_FN, flush = True)
 
         if action in {'UPDATE', 'INSERT'}:
             cur.execute(
@@ -160,8 +167,10 @@ def update_dst(msg):
             emp_id = %s and
             first_name = %s and
             last_name = %s and
+            dob = %s and
             city = %s and
-            dob = %s;
+            salary = %s
+            ;
             """,
             (emp_id, emp_FN, emp_LN, datetime.strptime(emp_dob, "%Y-%m-%d").date(), emp_city, emp_salary)
             )
