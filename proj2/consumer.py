@@ -29,16 +29,17 @@ import random
 import string
 import sys
 import psycopg2
-from confluent_kafka import Consumer, KafkaError, KafkaException
+from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 from confluent_kafka.serialization import StringDeserializer
 from employee import Employee
 # from employee import Employee
-from producer import employee_topic_name
+from producer import employee_topic_name, dlq_topic_name
 from datetime import datetime
+import time
 
-import sys
-sys.stdout.reconfigure(encoding='utf-8')
-sys.stderr.reconfigure(encoding='utf-8')
+# import sys
+# sys.stdout.reconfigure(encoding='utf-8')
+# sys.stderr.reconfigure(encoding='utf-8')
 
 
 schema_name = "public"
@@ -50,11 +51,14 @@ class cdcConsumer(Consumer):
     def __init__(self, host: str = "localhost", port: str = "29092", group_id: str = ''):
         self.conf = {'bootstrap.servers': f'{host}:{port}',
                      'group.id': group_id,
-                     'enable.auto.commit': True,
+                     'enable.auto.commit': False, # Change to false
                      'auto.offset.reset': 'latest'}
         super().__init__(self.conf)
         self.keep_runnning = True
         self.group_id = group_id
+        
+        # Adding a DQL producer
+        self._dlq_producer = Producer({'bootstrap.servers': f'{host}:{port}'})
 
     def create_tables(self):
         try:
@@ -89,28 +93,67 @@ class cdcConsumer(Consumer):
         return 
 
     def consume(self, topics, processing_func):
-        try:
-            self.subscribe(topics)
-            while self.keep_runnning:
-                #implement your logic here
-                msg = self.poll(timeout=1.0)
+        self.subscribe(topics)
+        while self.keep_runnning:
+            #implement your logic here
+            msg = self.poll(timeout=1.0)
 
-                if msg is None:
-                    print("== Waiting for messages ==", flush=True)
-                    continue
+            if msg is None:
+                print("== Waiting for messages ==", flush=True)
+                continue
 
-                if msg.error():
-                    print(f"poll error: {msg.error()}", flush=True)
-                    continue
+            if msg.error():
+                print(f"poll error: {msg.error()}", flush=True)
+                continue
 
-                print(f"got message: key={msg.key()} bytes={len(msg.value())}", flush=True)
-                if not msg.key():
-                    continue
-                
-                processing_func(msg)
+            print(f"got message: key={msg.key()} bytes={len(msg.value())}", flush=True)
+            if not msg.key():
+                continue
+            
 
-        finally:
-            self.close()
+            retries = 0
+            max_retries = 3
+            backoff = 0.5
+
+            while True:
+                try:
+                    processing_func(msg)
+
+                    # commit after a successful operation
+                    self.commit(msg)
+                    break  # done with this message
+
+                except Exception as err:
+                    retries += 1
+                    print(f"consumer process error attempt {retries}: {err}", flush=True)
+
+                    if retries > max_retries:
+                        # Build DLQ metadata
+                        payload = {
+                            "original_topic": msg.topic(),
+                            "partition": msg.partition(),
+                            "offset": msg.offset(),
+                            "timestamp": msg.timestamp()[1],
+                            "group_id": self.group_id,
+                            "retries": retries - 1,
+                            "exception": str(err),
+                            "key": msg.key().decode('utf-8') if msg.key() else None,
+                            "value": msg.value().decode('utf-8') if msg.value() else None
+                        }
+                        try:
+                            self._dlq_producer.produce(dlq_topic_name, json.dumps(payload).encode('utf-8'))
+                            self._dlq_producer.flush(5)
+                            print("[consume] sent to DLQ", flush=True)
+                        finally:
+                            # Commit the failed message
+                            self.commit(msg)
+                        break
+                    else:
+                        time.sleep(backoff)
+                        backoff = min(backoff * 2, 5.0) # Cap at 5 seconds
+                        
+
+        self.close()
 
 
 def update_dst(msg):
@@ -179,6 +222,7 @@ def update_dst(msg):
         cur.close()
     except Exception as err:
         print(f"Error occurred in update: {err}")
+        raise
 
 if __name__ == '__main__':
     consumer = cdcConsumer(group_id='employee-update-grp1-test0')

@@ -43,6 +43,7 @@ from datetime import datetime, timedelta
 
 
 employee_topic_name = "bf_employee_cdc"
+dlq_topic_name = "bf_employee_cdc_dlq" # Adding DLQ
 csv_file = "employees.csv"
 schema_name = "public"
 table_employee = "employees"

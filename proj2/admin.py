@@ -1,4 +1,5 @@
 from confluent_kafka.admin import AdminClient,NewTopic,ConfigResource
+import time
 
 class cdcClient(AdminClient):
     '''
@@ -50,12 +51,22 @@ class cdcClient(AdminClient):
 if __name__ == '__main__':
     client = cdcClient()
     employee_topic_name = "bf_employee_cdc"
+    dlq_topic_name = "bf_employee_cdc_dlq" # Adding DLQ
+
     num_parition = 3
     if client.topic_exists(employee_topic_name):
         print(f"Topic '{employee_topic_name}' already exists.")
         client.delete_topic([employee_topic_name]) # Need to rerun to recreate topic
-    else:
-        client.create_topic(employee_topic_name, num_parition)
-        print(f"Topic '{employee_topic_name}' created successfully.")
+        time.sleep(2)
+
+    if client.topic_exists(dlq_topic_name):
+        print(f"Topic '{dlq_topic_name}' already exists.")
+        client.delete_topic([dlq_topic_name]) # Need to rerun to recreate topic
+        time.sleep(2)
+
+    client.create_topic(employee_topic_name, num_parition)
+    print(f"Topic '{employee_topic_name}' created successfully.")
+    client.create_topic(dlq_topic_name, num_parition)
+    print(f"Topic '{dlq_topic_name}' created successfully.")
     
     
