@@ -91,11 +91,14 @@ class cdcProducer(Producer):
                     values (%s, %s, %s, %s, %s, %s)
                     on conflict (emp_id)
                     do update set
-                    first_name = excluded.first_name,
-                    last_name = excluded.last_name,
-                    dob = excluded.dob,
-                    city = excluded.city,
-                    salary = excluded.salary;""",
+                        first_name = excluded.first_name,
+                        last_name = excluded.last_name,
+                        dob = excluded.dob,
+                        city = excluded.city,
+                        salary = excluded.salary
+                    where (employees.first_name, employees.last_name, employees.dob, employees.city, employees.salary)
+                     is distinct from
+                       (excluded.first_name, excluded.last_name, excluded.dob, excluded.city, excluded.salary);""",
                     (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
                     )
                 print("Inserted records to table!", flush = True)
@@ -141,7 +144,8 @@ class cdcProducer(Producer):
                     dob date, 
                     city varchar(100),
                     salary int,
-                    action varchar(100)
+                    action varchar(100),
+                    created_at timestamp default now()
                 )
                 """)
             print("CDC table created!", flush = True)
@@ -175,14 +179,14 @@ class cdcProducer(Producer):
                    if tg_op = 'INSERT' or tg_op = 'UPDATE' then
 
                    insert into {schema_name}.{table_emp_cdc} 
-                   (emp_id, first_name, last_name, dob, city, salary, action)
-                   values (new.emp_id, new.first_name, new.last_name, new.dob, new.city, new.salary, tg_op);
+                   (emp_id, first_name, last_name, dob, city, salary, action, created_at)
+                   values (new.emp_id, new.first_name, new.last_name, new.dob, new.city, new.salary, tg_op, now());
 
                    elsif tg_op = 'DELETE' then
 
                    insert into {schema_name}.{table_emp_cdc} 
-                   (emp_id, first_name, last_name, dob, city, salary, action)
-                   values (old.emp_id, old.first_name, old.last_name, old.dob, old.city, old.salary, tg_op);
+                   (emp_id, first_name, last_name, dob, city, salary, action, created_at)
+                   values (old.emp_id, old.first_name, old.last_name, old.dob, old.city, old.salary, tg_op, now());
 
                    end if;
 
@@ -204,7 +208,7 @@ class cdcProducer(Producer):
 
             cur.close()
         except Exception as err:
-            print(f"Error occurred: {err}")
+            print(f"Error occurred in creating triggers: {err}")
         
         return # if you need to return sth, modify here
     
@@ -221,20 +225,28 @@ class cdcProducer(Producer):
             cur = conn.cursor()
             #your logic should go here
             
+            cur.execute(f"select coalesce(max(created_at), '1970-01-01 00:00:00') FROM {schema_name}.{table_emp_cdc};")
+            (last_ts,) = cur.fetchone()
+
             while self.running:
                 # Call produce
+                
                 cur.execute(f"""
                     select emp_id, first_name, last_name, dob, city, salary, action
-                    from {schema_name}.{table_emp_cdc};
-                    """)
+                    from {schema_name}.{table_emp_cdc}
+                    where created_at > %s;
+                    """,
+                    (last_ts,))
+
                 rows = cur.fetchall()
+                print(rows, flush = True)
+
                 if not rows:
                     time.sleep(1)
                     continue
                 
-
                 for idx, row in enumerate(rows):
-                    record = Employee.from_line([idx] + row)
+                    record = Employee.from_line([idx] + list(row))
                     self.produce(employee_topic_name,
                                  key = encoder(str(row[0])),
                                  value = encoder(record.to_json())
@@ -242,13 +254,14 @@ class cdcProducer(Producer):
 
                 self.flush(10)
 
-                cur.execute(f"delete from {schema_name}.{table_emp_cdc};")
+                last_ts = rows[-1][-1] # Updating the last timestamp
+
                 conn.commit()
                 time.sleep(0.5)
 
             cur.close()
         except Exception as err:
-            print(f"Error occurred: {err}")
+            print(f"Error occurred in fech_cdc: {err}")
         
         return # if you need to return sth, modify here
     
