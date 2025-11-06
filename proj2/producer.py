@@ -35,7 +35,7 @@ from confluent_kafka.serialization import StringSerializer
 import psycopg2
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 employee_topic_name = "bf_employee_cdc"
@@ -55,6 +55,7 @@ class cdcProducer(Producer):
                           'acks' : 'all'}
         super().__init__(producerConfig)
         self.running = True
+        self.last_ts = datetime(1970, 1, 1)
 
     def load_csv(self, path):
         df = pd.read_csv(path)
@@ -85,20 +86,28 @@ class cdcProducer(Producer):
             for emp in emps:
                 print([emp[1], emp[2], emp[3], datetime.strptime(emp[4], "%Y-%m-%d").date(), emp[5]], flush = True)
                 # print(datetime.strptime(emp[4], "%Y-%m-%d").date(), flush = True)
+                # cur.execute(
+                #     f"insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)"
+                #     """
+                #     values (%s, %s, %s, %s, %s, %s)
+                #     on conflict (emp_id)
+                #     do update set
+                #         first_name = excluded.first_name,
+                #         last_name = excluded.last_name,
+                #         dob = excluded.dob,
+                #         city = excluded.city,
+                #         salary = excluded.salary
+                #     where (employees.first_name, employees.last_name, employees.dob, employees.city, employees.salary)
+                #      is distinct from
+                #        (excluded.first_name, excluded.last_name, excluded.dob, excluded.city, excluded.salary);""",
+                #     (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
+                #     )
                 cur.execute(
                     f"insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)"
                     """
                     values (%s, %s, %s, %s, %s, %s)
                     on conflict (emp_id)
-                    do update set
-                        first_name = excluded.first_name,
-                        last_name = excluded.last_name,
-                        dob = excluded.dob,
-                        city = excluded.city,
-                        salary = excluded.salary
-                    where (employees.first_name, employees.last_name, employees.dob, employees.city, employees.salary)
-                     is distinct from
-                       (excluded.first_name, excluded.last_name, excluded.dob, excluded.city, excluded.salary);""",
+                    do nothing;""",
                     (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
                     )
                 print("Inserted records to table!", flush = True)
@@ -125,7 +134,7 @@ class cdcProducer(Producer):
             ### 1) Employee table
             cur.execute(f"""
                 create table if not exists {schema_name}.{table_employee} (
-                    emp_id serial primary key, 
+                    emp_id int primary key, 
                     first_name varchar(100), 
                     last_name varchar(100), 
                     dob date, 
@@ -138,14 +147,15 @@ class cdcProducer(Producer):
             ### 2) Actions table
             cur.execute(f"""
                 create table if not exists {schema_name}.{table_emp_cdc} (
-                    emp_id serial, 
+                    emp_id int, 
                     first_name varchar(100), 
                     last_name varchar(100), 
                     dob date, 
                     city varchar(100),
                     salary int,
                     action varchar(100),
-                    created_at timestamp default now()
+                    action_id bigserial unique,
+                    created_at timestamptz default now()
                 )
                 """)
             print("CDC table created!", flush = True)
@@ -167,7 +177,7 @@ class cdcProducer(Producer):
             conn.autocommit = True
             cur = conn.cursor()
             #your logic should go here
-            cur.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {schema_name}.{table_employee};")
+            cur.execute(f"drop trigger if exists {trigger_name} on {schema_name}.{table_employee};")
             # cur.execute(f"DROP FUNCTION IF EXISTS {schema_name}.func_{trigger_name}();")
 
             # Create function
@@ -225,18 +235,19 @@ class cdcProducer(Producer):
             cur = conn.cursor()
             #your logic should go here
             
-            cur.execute(f"select coalesce(max(created_at), '1970-01-01 00:00:00') FROM {schema_name}.{table_emp_cdc};")
-            (last_ts,) = cur.fetchone()
+            # cur.execute(f"select coalesce(max(created_at), '1970-01-01 00:00:00') FROM {schema_name}.{table_emp_cdc};")
+            # (last_ts,) = cur.fetchone()
 
             while self.running:
                 # Call produce
                 
                 cur.execute(f"""
-                    select emp_id, first_name, last_name, dob, city, salary, action
+                    select action_id, emp_id, first_name, last_name, dob, city, salary, action, created_at
                     from {schema_name}.{table_emp_cdc}
                     where created_at > %s;
                     """,
-                    (last_ts,))
+                    (self.last_ts,)
+                    )
 
                 rows = cur.fetchall()
                 print(rows, flush = True)
@@ -245,16 +256,21 @@ class cdcProducer(Producer):
                     time.sleep(1)
                     continue
                 
+                sent = 0
                 for idx, row in enumerate(rows):
-                    record = Employee.from_line([idx] + list(row))
+                    record = Employee.from_line(row[:-1])
                     self.produce(employee_topic_name,
-                                 key = encoder(str(row[0])),
+                                 key = encoder(str(row[1])),
                                  value = encoder(record.to_json())
                           )
+                    sent += 1
+
+                print(f"Producer finished. Sent {sent} messages.")
+                print(f"Latest timestamp: {rows[-1][-1]}.")
 
                 self.flush(10)
 
-                last_ts = rows[-1][-1] # Updating the last timestamp
+                self.last_ts = rows[-1][-1] # Updating the last timestamp
 
                 conn.commit()
                 time.sleep(0.5)
@@ -273,9 +289,12 @@ if __name__ == '__main__':
     print(emps, flush = True)
 
     producer.create_tables()
+    
+
+
     producer.setup_cdc()
     producer.load_csv_to_db(emps)
     
-    while producer.running:
-        # your implementation goes here
-        producer.fetch_cdc(encoder)
+
+    # your implementation goes here
+    producer.fetch_cdc(encoder)
