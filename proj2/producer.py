@@ -29,11 +29,14 @@ import os
 from confluent_kafka import Producer
 from employee import Employee
 import confluent_kafka
-from pyspark.sql import SparkSession
+# from pyspark.sql import SparkSession
 import pandas as pd
 from confluent_kafka.serialization import StringSerializer
 import psycopg2
 import random
+import time
+from datetime import datetime
+
 
 employee_topic_name = "bf_employee_cdc"
 csv_file = "employees.csv"
@@ -62,7 +65,9 @@ class cdcProducer(Producer):
             eln = row['Last Name']
             edob = row['Date of Birth']
             ecity = row['City']
-            lines.append(['insert', eid, efn, eln, edob, ecity])
+            lines.append([idx, eid, efn, eln, edob, ecity, 'INSERT'])
+
+        print(lines, flush = True)
 
         return lines
 
@@ -78,9 +83,11 @@ class cdcProducer(Producer):
             cur = conn.cursor()
             #your logic should go here
             for emp in emps:
+                print([emp[1], emp[2], emp[3], datetime.strptime(emp[4], "%Y-%m-%d").date(), emp[5]], flush = True)
+                # print(datetime.strptime(emp[4], "%Y-%m-%d").date(), flush = True)
                 cur.execute(
-                    f"""
-                    insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)
+                    f"insert into {schema_name}.{table_employee} (emp_id, first_name, last_name, dob, city, salary)"
+                    """
                     values (%s, %s, %s, %s, %s, %s)
                     on conflict (emp_id)
                     do update set
@@ -88,10 +95,10 @@ class cdcProducer(Producer):
                     last_name = excluded.last_name,
                     dob = excluded.dob,
                     city = excluded.city,
-                    salary = excluded.salary;
-                    """,
-                    (emp[1], emp[2], emp[3], emp[4], emp[5], random.randint(50000, 150000))
+                    salary = excluded.salary;""",
+                    (int(emp[1]), str(emp[2]), str(emp[3]), datetime.strptime(emp[4], "%Y-%m-%d").date(), str(emp[5]), random.randint(50000, 150000))
                     )
+                print("Inserted records to table!", flush = True)
 
 
             cur.close()
@@ -115,7 +122,7 @@ class cdcProducer(Producer):
             ### 1) Employee table
             cur.execute(f"""
                 create table if not exists {schema_name}.{table_employee} (
-                    emp_id serial, 
+                    emp_id serial primary key, 
                     first_name varchar(100), 
                     last_name varchar(100), 
                     dob date, 
@@ -123,6 +130,7 @@ class cdcProducer(Producer):
                     salary int
                 )
                 """)
+            print("Employee table created!", flush = True)
             
             ### 2) Actions table
             cur.execute(f"""
@@ -136,6 +144,7 @@ class cdcProducer(Producer):
                     action varchar(100)
                 )
                 """)
+            print("CDC table created!", flush = True)
             
             cur.close()
         except Exception as err:
@@ -154,7 +163,7 @@ class cdcProducer(Producer):
             conn.autocommit = True
             cur = conn.cursor()
             #your logic should go here
-            cur.execute(f"DROP TRIGGER IF EXISTS {schema_name}.{trigger_name} ON {schema_name}.{table_employee};")
+            cur.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON {schema_name}.{table_employee};")
             # cur.execute(f"DROP FUNCTION IF EXISTS {schema_name}.func_{trigger_name}();")
 
             # Create function
@@ -163,17 +172,17 @@ class cdcProducer(Producer):
                create or replace function {schema_name}.func_{trigger_name} ()
                returns trigger as $$
                begin
-                   if tg_op = 'insert' or tg_op = 'update' then
+                   if tg_op = 'INSERT' or tg_op = 'UPDATE' then
 
                    insert into {schema_name}.{table_emp_cdc} 
                    (emp_id, first_name, last_name, dob, city, salary, action)
-                   values (new.emp_id, new.first_name, new.dob, new.city, new.salary, tg_op);
+                   values (new.emp_id, new.first_name, new.last_name, new.dob, new.city, new.salary, tg_op);
 
-                   elsif tg_op = 'delete' then
+                   elsif tg_op = 'DELETE' then
 
                    insert into {schema_name}.{table_emp_cdc} 
                    (emp_id, first_name, last_name, dob, city, salary, action)
-                   values (old.emp_id, old.first_name, old.dob, old.city, old.salary, tg_op);
+                   values (old.emp_id, old.first_name, old.last_name, old.dob, old.city, old.salary, tg_op);
 
                    end if;
 
@@ -186,12 +195,12 @@ class cdcProducer(Producer):
 
             ### Create trigger from function
             cur.execute(f"""
-                create trigger {schema_name}.{trigger_name}
+                create trigger {trigger_name}
                 after insert or update or delete on {schema_name}.{table_employee}
                 for each row
                 execute function {schema_name}.func_{trigger_name} ()
                 """)
-
+      
 
             cur.close()
         except Exception as err:
@@ -211,25 +220,31 @@ class cdcProducer(Producer):
             conn.autocommit = True
             cur = conn.cursor()
             #your logic should go here
-
-            # Call produce
-            cur.execute(f"""
-                select action, emp_id, first_name, last_name, dob, city, salary 
-                from {schema_name}.{table_emp_cdc};
-                """)
-            rows = cur.fetchall()
-            if not rows:
-                continue
             
+            while self.running:
+                # Call produce
+                cur.execute(f"""
+                    select emp_id, first_name, last_name, dob, city, salary, action
+                    from {schema_name}.{table_emp_cdc};
+                    """)
+                rows = cur.fetchall()
+                if not rows:
+                    time.sleep(1)
+                    continue
+                
 
-            for row in rows:
-                record = Employee.from_line(row)
-                self.produce(employee_topic_name,
-                             key = encoder(row[1]),
-                             value = encoder(record.to_json())
-                      )
+                for idx, row in enumerate(rows):
+                    record = Employee.from_line([idx] + row)
+                    self.produce(employee_topic_name,
+                                 key = encoder(str(row[0])),
+                                 value = encoder(record.to_json())
+                          )
 
-            self.flush(10)
+                self.flush(10)
+
+                cur.execute(f"delete from {schema_name}.{table_emp_cdc};")
+                conn.commit()
+                time.sleep(0.5)
 
             cur.close()
         except Exception as err:
@@ -242,10 +257,12 @@ if __name__ == '__main__':
     encoder = StringSerializer('utf-8')
     producer = cdcProducer()
     emps = producer.load_csv(csv_file)
-    self.create_tables()
-    self.setup_cdc()
+    print(emps, flush = True)
+
+    producer.create_tables()
+    producer.setup_cdc()
     producer.load_csv_to_db(emps)
     
     while producer.running:
         # your implementation goes here
-        self.fetch_cdc(encoder)
+        producer.fetch_cdc(encoder)
