@@ -37,6 +37,25 @@ from producer import employee_topic_name, dlq_topic_name
 from datetime import datetime
 import time
 
+from pathlib import Path
+from confluent_kafka import DeserializingConsumer, Producer  # keep Producer for DLQ if you use it
+from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry.avro import AvroDeserializer
+
+sr = SchemaRegistryClient({"url": "http://localhost:8081"})
+key_deser   = AvroDeserializer(sr, schema_str=open("schemas/employee_key.avsc").read())
+value_deser = AvroDeserializer(sr, schema_str=open("schemas/employee_value.avsc").read())
+
+# conf = {
+#     "bootstrap.servers": "localhost:29092",
+#     "group.id": "employee-update-grp1",
+#     "enable.auto.commit": False,
+#     "auto.offset.reset": "earliest",
+#     "key.deserializer": key_deser,
+#     "value.deserializer": value_deser
+# }
+# consumer = DeserializingConsumer(conf)
+
 # import sys
 # sys.stdout.reconfigure(encoding='utf-8')
 # sys.stderr.reconfigure(encoding='utf-8')
@@ -45,18 +64,32 @@ import time
 schema_name = "public"
 table_employee = "employees"
 
-class cdcConsumer(Consumer):
+class cdcConsumer(DeserializingConsumer):
     #if running outside Docker (i.e. producer is NOT in the docer-compose file): host = localhost and port = 29092
     #if running inside Docker (i.e. producer IS IN the docer-compose file), host = 'kafka' or whatever name used for the kafka container, port = 9092
-    def __init__(self, host: str = "localhost", port: str = "29092", group_id: str = ''):
-        self.conf = {'bootstrap.servers': f'{host}:{port}',
-                     'group.id': group_id,
-                     'enable.auto.commit': False, # Change to false
-                     'auto.offset.reset': 'latest'}
-        super().__init__(self.conf)
+    def __init__(self, host: str = "localhost", port: str = "29092", \
+        group_id: str = '', sr_url: str = "http://localhost:8081"):
+        sr = SchemaRegistryClient({"url": sr_url})
+
+        key_schema_str = Path("schemas/employee_key.avsc").read_text(encoding="utf-8")
+        value_schema_str = Path("schemas/employee_value.avsc").read_text(encoding="utf-8")
+
+        key_deser = AvroDeserializer(schema_registry_client=sr, schema_str=key_schema_str)
+        value_deser = AvroDeserializer(schema_registry_client=sr, schema_str=value_schema_str)
+
+        conf = {
+            "bootstrap.servers": f"{host}:{port}",
+            "group.id": group_id,
+            "enable.auto.commit": False,
+            "auto.offset.reset": "latest",
+            "key.deserializer": key_deser,
+            "value.deserializer": value_deser,
+        }
+
+        super().__init__(conf)
         self.keep_runnning = True
         self.group_id = group_id
-        
+
         # Adding a DQL producer
         self._dlq_producer = Producer({'bootstrap.servers': f'{host}:{port}'})
 
@@ -70,7 +103,6 @@ class cdcConsumer(Consumer):
                 password="postgres")
             conn.autocommit = True
             cur = conn.cursor()
-            #your logic should go here
 
             ### 1) Employee table
             cur.execute(f"""
@@ -80,7 +112,7 @@ class cdcConsumer(Consumer):
                     last_name varchar(100), 
                     dob date, 
                     city varchar(100),
-                    salary int
+                    salary float
                 )
                 """)
             print("Employee table created!", flush = True)
@@ -111,13 +143,17 @@ class cdcConsumer(Consumer):
                 continue
             
 
+            key_dict = msg.key()       
+            val_dict = msg.value()     
+
+
             retries = 0
             max_retries = 3
             backoff = 0.5
 
             while True:
                 try:
-                    processing_func(msg)
+                    processing_func(val_dict)
 
                     # commit after a successful operation
                     self.commit(msg)
@@ -137,11 +173,12 @@ class cdcConsumer(Consumer):
                             "group_id": self.group_id,
                             "retries": retries - 1,
                             "exception": str(err),
-                            "key": msg.key().decode('utf-8') if msg.key() else None,
-                            "value": msg.value().decode('utf-8') if msg.value() else None
+                            "key": msg.key(),
+                            "value": msg.value()
                         }
                         try:
-                            self._dlq_producer.produce(dlq_topic_name, json.dumps(payload).encode('utf-8'))
+                            self._dlq_producer.produce(dlq_topic_name, json.dumps(payload, default=str).encode('utf-8'))
+
                             self._dlq_producer.flush(5)
                             print("[consume] sent to DLQ", flush=True)
                         finally:
@@ -156,8 +193,8 @@ class cdcConsumer(Consumer):
         self.close()
 
 
-def update_dst(msg):
-    e = Employee(**(json.loads(msg.value())))
+def update_dst(d):
+    # e = Employee(**(json.loads(msg.value())))
     # print(e.action, flush = True)
 
     try:
@@ -171,16 +208,21 @@ def update_dst(msg):
         cur = conn.cursor()
         #your logic goes here
 
-        action_id = e.action_id
-        emp_id = e.emp_id
-        emp_FN = e.emp_FN
-        emp_LN = e.emp_LN
-        emp_dob = e.emp_dob
-        emp_city = e.emp_city
-        emp_salary = e.emp_salary
-        action = e.action
+        emp_id     = d["emp_id"]
+        emp_FN     = d["first_name"]
+        emp_LN     = d["last_name"]
+        emp_dob_raw= d.get("dob")          # these could be None
+        emp_city   = d.get("city")
+        emp_salary = d.get("salary")
+        action     = d.get("action")
 
-        print(e.action, e.emp_FN, e.emp_FN, flush = True)
+        dob_date = None
+        if emp_dob_raw:
+            dob_date = (emp_dob_raw if hasattr(emp_dob_raw, "year")
+                        else datetime.strptime(emp_dob_raw, "%Y-%m-%d").date())
+
+
+        print(action, emp_FN, emp_FN, flush = True)
 
         if action in {'UPDATE', 'INSERT'}:
             cur.execute(
@@ -197,7 +239,7 @@ def update_dst(msg):
             where (employees.first_name, employees.last_name, employees.dob, employees.city, employees.salary)
              is distinct from
                (excluded.first_name, excluded.last_name, excluded.dob, excluded.city, excluded.salary);""",
-            (emp_id, emp_FN, emp_LN, datetime.strptime(emp_dob, "%Y-%m-%d").date(), emp_city, emp_salary)
+            (emp_id, emp_FN, emp_LN, dob_date, emp_city, emp_salary)
             )
 
             print(f"Inserted/Updated one record!", flush = True)
@@ -215,7 +257,7 @@ def update_dst(msg):
             salary = %s
             ;
             """,
-            (emp_id, emp_FN, emp_LN, datetime.strptime(emp_dob, "%Y-%m-%d").date(), emp_city, emp_salary)
+            (emp_id, emp_FN, emp_LN, dob_date, emp_city, emp_salary)
             )
             print(f"Deleted one record!", flush = True)
 

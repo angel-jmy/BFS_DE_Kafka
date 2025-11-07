@@ -37,6 +37,12 @@ import random
 import time
 from datetime import datetime, timedelta
 
+from pathlib import Path
+from confluent_kafka import SerializingProducer   # NEW
+from confluent_kafka.schema_registry import SchemaRegistryClient   # NEW
+from confluent_kafka.schema_registry.avro import AvroSerializer    # NEW
+
+
 # import sys
 # sys.stdout.reconfigure(encoding='utf-8')
 # sys.stderr.reconfigure(encoding='utf-8')
@@ -50,16 +56,50 @@ table_employee = "employees"
 table_emp_cdc = "emp_cdc"
 trigger_name = "employee_sync"
 
-class cdcProducer(Producer):
+class cdcProducer(SerializingProducer):
     #if running outside Docker (i.e. producer is NOT in the docer-compose file): host = localhost and port = 29092
     #if running inside Docker (i.e. producer IS IN the docer-compose file), host = 'kafka' or whatever name used for the kafka container, port = 9092
-    def __init__(self, host="localhost", port="29092"):
+    def __init__(self, host="localhost", port="29092", sr_url: str = "http://localhost:8081"):
+        # read AVSCs inline (no helpers added)
+        key_schema_str = Path("schemas/employee_key.avsc").read_text(encoding="utf-8")
+        value_schema_str = Path("schemas/employee_value.avsc").read_text(encoding="utf-8")
+
+        sr = SchemaRegistryClient({"url": sr_url})
+
+        # create serializers inline (lambda only, no extra defs)
+        key_serializer = AvroSerializer(
+            schema_registry_client=sr,
+            schema_str=key_schema_str,
+            to_dict=lambda d, ctx: d 
+        )
+        value_serializer = AvroSerializer(
+            schema_registry_client=sr,
+            schema_str=value_schema_str,
+            to_dict=lambda e, ctx: {
+                # map your existing Employee instance fields to AVRO field names
+                "emp_id": e.emp_id,
+                "first_name": e.emp_FN,
+                "last_name": e.emp_LN,
+                "dob": e.emp_dob,         
+                "city": e.emp_city,
+                "salary": e.emp_salary,
+                "action": e.action,
+                "action_id": e.action_id
+            }
+        )
+
+        super().__init__({
+            "bootstrap.servers": f"{host}:{port}",
+            "acks": "all",
+            "key.serializer": key_serializer,
+            "value.serializer": value_serializer,
+        })
+
+        self.running = True
+        
         self.host = host
         self.port = port
-        producerConfig = {'bootstrap.servers':f"{self.host}:{self.port}",
-                          'acks' : 'all'}
-        super().__init__(producerConfig)
-        self.running = True
+
         self.last_ts = datetime(1970, 1, 1)
 
     def load_csv(self, path):
@@ -144,7 +184,7 @@ class cdcProducer(Producer):
                     last_name varchar(100), 
                     dob date, 
                     city varchar(100),
-                    salary int
+                    salary float
                 )
                 """)
             print("Employee table created!", flush = True)
@@ -157,7 +197,7 @@ class cdcProducer(Producer):
                     last_name varchar(100), 
                     dob date, 
                     city varchar(100),
-                    salary int,
+                    salary float,
                     action varchar(100),
                     action_id bigserial unique,
                     created_at timestamptz default now()
@@ -266,10 +306,18 @@ class cdcProducer(Producer):
                 sent = 0
                 for idx, row in enumerate(rows):
                     record = Employee.from_line(row[:-1])
-                    self.produce(employee_topic_name,
-                                 key = encoder(str(row[1])),
-                                 value = encoder(record.to_json())
-                          )
+                    # self.produce(employee_topic_name,
+                    #              key = encoder(str(row[1])),
+                    #              value = encoder(record.to_json())
+                    #       )
+
+                    # NEW (Avro)
+                    self.produce(
+                        employee_topic_name,
+                        key={"emp_id": record.emp_id},   # matches employee_key.avsc
+                        value=record                     # AvroSerializer will call the lambda above to map to a dict
+                    )
+
                     sent += 1
 
                 print(f"Producer finished. Sent {sent} messages.")

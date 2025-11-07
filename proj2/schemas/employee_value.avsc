@@ -3,13 +3,26 @@
   "name": "EmployeeChange",
   "namespace": "bf.cdc",
   "fields": [
-    {"name": "action_id", "type": "long"},
-    {"name": "emp_id", "type": "int"},
-    {"name": "emp_FN", "type": ["null","string"], "default": null},
-    {"name": "emp_LN", "type": ["null","string"], "default": null},
-    {"name": "emp_dob", "type": ["null","string"], "default": null},  // ISO "YYYY-MM-DD" or null
-    {"name": "emp_city", "type": ["null","string"], "default": null},
-    {"name": "emp_salary", "type": ["null","double"], "default": null},
-    {"name": "action", "type": {"type":"enum","name":"Action","symbols":["INSERT","UPDATE","DELETE","SNAPSHOT"]}}
+    { "name": "action_id", "type": "long", "aliases": ["action id"] },
+    { "name": "emp_id",    "type": "int",  "aliases": ["emp id"] },
+
+    { "name": "first_name", "type": ["null","string"], "default": null,
+      "aliases": ["emp FN"] },
+
+    { "name": "last_name",  "type": ["null","string"], "default": null,
+      "aliases": ["emp LN"] },
+
+    { "name": "dob",   "type": ["null","string"], "default": null,
+      "aliases": ["emp dob"] },
+
+    { "name": "city",  "type": ["null","string"], "default": null,
+      "aliases": ["emp city"] },
+
+    { "name": "salary","type": ["null","double"], "default": null,
+      "aliases": ["emp salary"] },
+
+    { "name": "action",
+      "type": { "type": "enum", "name": "Action",
+                "symbols": ["INSERT","UPDATE","DELETE","SNAPSHOT"] } }
   ]
 }
