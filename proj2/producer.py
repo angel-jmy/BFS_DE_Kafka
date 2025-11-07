@@ -66,7 +66,7 @@ class cdcProducer(SerializingProducer):
 
         sr = SchemaRegistryClient({"url": sr_url})
 
-        # create serializers inline (lambda only, no extra defs)
+        # create serializers inline
         key_serializer = AvroSerializer(
             schema_registry_client=sr,
             schema_str=key_schema_str,
@@ -76,7 +76,6 @@ class cdcProducer(SerializingProducer):
             schema_registry_client=sr,
             schema_str=value_schema_str,
             to_dict=lambda e, ctx: {
-                # map your existing Employee instance fields to AVRO field names
                 "emp_id": e.emp_id,
                 "first_name": e.emp_FN,
                 "last_name": e.emp_LN,
@@ -162,7 +161,7 @@ class cdcProducer(SerializingProducer):
         except Exception as err:
             print(f"Error occurred: {err}")
         
-        return # if you need to return sth, modify here
+        return
 
     def create_tables(self):
         try:
@@ -315,7 +314,7 @@ class cdcProducer(SerializingProducer):
                     self.produce(
                         employee_topic_name,
                         key={"emp_id": record.emp_id},   # matches employee_key.avsc
-                        value=record                     # AvroSerializer will call the lambda above to map to a dict
+                        value=record                     # call the lambda above to map to a dict
                     )
 
                     sent += 1
